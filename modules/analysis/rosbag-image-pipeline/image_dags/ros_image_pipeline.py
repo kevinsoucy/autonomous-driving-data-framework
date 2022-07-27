@@ -49,9 +49,12 @@ CONTAINER_TIMEOUT = 300  # Seconds - must be at least 60 seconds
 IMAGE_TOPICS = ["/flir_adk/rgb_front_left/image_raw", "/flir_adk/rgb_front_right/image_raw"]
 DESIRED_ENCODING = "bgr8"
 
-# SET MODULE VARIABLES FOR OBJECT DETECTION
-MODEL = "yolov5s"
+# SET MODULE VARIABLES FOR OBJECT & LANE DETECTION
+YOLO_MODEL = "yolov5s"
 YOLO_INSTANCE_TYPE = "ml.m5.xlarge"
+
+LANEDET_MODEL = "yolov5s"
+LANEDET_INSTANCE_TYPE = "ml.m5.xlarge"
 
 
 # GET MODULE VARIABLES FROM APP.PY AND DEPLOYSPEC
@@ -392,7 +395,7 @@ with DAG(
                         destination=f"s3://{TARGET_BUCKET}/{image_directory}_post_obj_dets/",
                     )
                 ],
-                arguments=["--model", MODEL],
+                arguments=["--model", YOLO_MODEL],
                 wait=False,
                 logs=False,
             )
@@ -406,6 +409,78 @@ with DAG(
         logger.info(f"All object detection jobs complete")
 
     submit_yolo_job = PythonOperator(task_id="submit_yolo_job", python_callable=sagemaker_yolo_operation)
+
+    def sagemaker_lane_det_operation(**kwargs):
+
+        # Establish AWS API Connections
+        sts_client = boto3.client("sts")
+        assumed_role_object = sts_client.assume_role(RoleArn=DAG_ROLE, RoleSessionName="AssumeRoleSession1")
+        credentials = assumed_role_object["Credentials"]
+        dynamodb = boto3.resource(
+            "dynamodb",
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+        )
+        table = dynamodb.Table(DYNAMODB_TABLE)
+        batch_id = kwargs["dag_run"].run_id
+
+        # Get Image Directories per Recording File to Label
+        image_directory_items = table.query(
+            KeyConditionExpression=Key("pk").eq(batch_id),
+            Select="SPECIFIC_ATTRIBUTES",
+            ProjectionExpression="raw_image_dirs"
+        )['Items']
+
+        image_directories = []
+        for item in image_directory_items:
+            image_directories += item['raw_image_dirs']
+
+        logger.info(f"Starting lane detection job for {len(image_directories)} directories")
+
+        processor = Processor(
+            image_uri=f"{account}.dkr.ecr.{REGION}.amazonaws.com/{ECR_REPO_NAME}:lanedet",
+            role=DAG_ROLE,
+            instance_count=1,
+            instance_type=LANEDET_INSTANCE_TYPE,
+            base_job_name=f"LANEDET"
+        )
+
+        for image_directory in image_directories:
+            logger.info(f"Starting lane detection job for {image_directory}")
+            logger.info(
+                "Job details available at: "
+                f"https://{REGION}.console.aws.amazon.com/sagemaker/home?region={REGION}#/processing-jobs"
+            )
+            processor.run(
+                inputs=[
+                    ProcessingInput(
+                        input_name='data',
+                        source=f"s3://{TARGET_BUCKET}/{image_directory}/",
+                        destination='/opt/ml/processing/input/')
+                ],
+                outputs=[
+                    ProcessingOutput(
+                        output_name='output',
+                        source='/opt/ml/processing/output/',
+                        destination=f"s3://{TARGET_BUCKET}/{image_directory}_post_lane_dets/"
+                    )
+                ],
+                arguments=['--model', LANEDET_MODEL],
+                wait=False,
+                logs=False,
+            )
+
+        logger.info("Waiting on all jobs to finish")
+        logger.info(f"Jobs: {processor.jobs}")
+        for job in processor.jobs:
+            logger.info(f"Waiting on: {job} - logs from job:")
+            job.wait(logs=True)
+
+        logger.info(f"All lane detection jobs complete")
+
+
+    submit_lane_det_job = PythonOperator(task_id="submit_lane_det_job", python_callable=sagemaker_lane_det_operation)
 
     deregister_batch_job_definition = PythonOperator(
         task_id="deregister_batch_job_definition",
@@ -421,5 +496,5 @@ with DAG(
         >> register_batch_job_defintion
         >> submit_batch_job
         >> deregister_batch_job_definition
-        >> submit_yolo_job
+        >> [submit_yolo_job, submit_lane_det_job]
     )
