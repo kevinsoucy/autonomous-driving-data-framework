@@ -53,8 +53,9 @@ DESIRED_ENCODING = "bgr8"
 YOLO_MODEL = "yolov5s"
 YOLO_INSTANCE_TYPE = "ml.m5.xlarge"
 
-LANEDET_MODEL = "yolov5s"
 LANEDET_INSTANCE_TYPE = "ml.m5.xlarge"
+LANEDET_MODEL = "models/laneatt_r34_tusimple.pth"
+LANEDET_MODEL_CONFIG = "configs/laneatt/resnet34_tusimple.py"
 
 
 # GET MODULE VARIABLES FROM APP.PY AND DEPLOYSPEC
@@ -436,6 +437,27 @@ with DAG(
             image_directories += item['raw_image_dirs']
 
         logger.info(f"Starting lane detection job for {len(image_directories)} directories")
+
+        from sagemaker import get_execution_role
+
+        pytorch_processor = PyTorchProcessor(
+            framework_version='1.8',
+            role=get_execution_role(),
+            instance_type=LANEDET_INSTANCE_TYPE,
+            # ml.m4.xlarge (NO) ml.g4dn.xlarge (NO) ml.p3.2xlarge (YES) ml.p2.xlarge (YES)
+            instance_count=1,
+            base_job_name='LANEDET',
+            image_uri=f"{account}.dkr.ecr.{REGION}.amazonaws.com/{ECR_REPO_NAME}:lanedet",
+        )
+        # Run the processing job
+        pytorch_processor.run(
+            code='tools/detect_sm3.py',
+            source_dir='s3://dgraeberaws-sagemaker/lanedet/configs',
+            arguments=[
+                '--model', LANEDET_MODEL,
+                '--config', LANEDET_MODEL_CONFIG,
+            ],
+        )
 
         processor = Processor(
             image_uri=f"{account}.dkr.ecr.{REGION}.amazonaws.com/{ECR_REPO_NAME}:lanedet",
