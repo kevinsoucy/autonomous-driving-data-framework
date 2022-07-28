@@ -33,9 +33,9 @@ from airflow.utils.dates import days_ago
 from boto3.dynamodb.conditions import Key
 from boto3.session import Session
 from mypy_boto3_batch.client import BatchClient
+from sagemaker import get_execution_role
 from sagemaker.processing import ProcessingInput, ProcessingOutput, Processor
 from sagemaker.pytorch.processing import PyTorchProcessor
-from sagemaker.session import Session
 
 from image_dags import batch_creation_and_tracking
 from image_dags.dag_config import ADDF_MODULE_METADATA, DEPLOYMENT_NAME, MODULE_NAME, REGION
@@ -154,10 +154,10 @@ def create_batch_of_drives(ti, **kwargs):
     )["Count"]
 
     if files_in_batch > 0:
-        print("Batch Id already exists in tracking table - using existing batch")
+        logger.info("Batch Id already exists in tracking table - using existing batch")
         return files_in_batch
 
-    print("New Batch Id - collecting unprocessed drives from S3 and adding to the batch")
+    logger.info("New Batch Id - collecting unprocessed drives from S3 and adding to the batch")
     files_in_batch = batch_creation_and_tracking.add_drives_to_batch(
         table=table,
         drives_to_process=drives_to_process,
@@ -191,16 +191,18 @@ def get_batch_client() -> BatchClient:
         RoleArn=DAG_ROLE,
         RoleSessionName="AssumeRoleSession1",
     )
-
+    logging.info(response)
     session = Session(
-        aws_access_key_id=response["Credentials"]["AccessKeyId"],
-        aws_secret_access_key=response["Credentials"]["SecretAccessKey"],
-        aws_session_token=response["Credentials"]["SessionToken"],
+        response["Credentials"]["AccessKeyId"],
+        response["Credentials"]["SecretAccessKey"],
+        response["Credentials"]["SessionToken"],
+        REGION,
     )
     return session.client("batch")
 
 
 def register_job_definition_on_demand(ti, job_def_name: str) -> str:
+
     client = get_batch_client()
 
     container_properties = {
@@ -303,13 +305,14 @@ with DAG(
                             env
                             
                             echo "[$(date)] Start Image Extraction - batch $BATCH_ID, index: $AWS_BATCH_JOB_ARRAY_INDEX"
+                            echo "[$(date)] Start Image Extraction - $IMAGE_TOPICS"
                             python3 rostopng/main.py \
                                 --tablename $TABLE_NAME \
                                 --index $AWS_BATCH_JOB_ARRAY_INDEX \
                                 --batchid $BATCH_ID \
                                 --localbagpath $LOCAL_BAG_PATH \
                                 --localimagespath $LOCAL_IMAGES_PATH \
-                                --imagetopics $IMAGE_TOPICS \
+                                --imagetopics "$IMAGE_TOPICS" \
                                 --desiredencoding $DESIRED_ENCODING \
                                 --targetbucket $TARGET_BUCKET
                             """

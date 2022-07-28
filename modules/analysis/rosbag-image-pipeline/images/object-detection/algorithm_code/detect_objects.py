@@ -1,6 +1,4 @@
-# from yolov5 import load as load_yolov5_model
 from argparse import ArgumentParser
-from datetime import datetime
 from glob import glob as get_files
 from json import dump as dump_json
 
@@ -151,8 +149,5 @@ if __name__ == "__main__":
 
         output_pandas["source_image"] = image_file_name
         dfs.append(output_pandas)
-
-    # with open(f"{output_data_path}all_predictions.json", 'w') as file:
-    #     dump_json(output, file, indent=2, separators=(',', ': '), sort_keys=False)
 
     concat(dfs).to_csv(f"{output_data_path}all_predictions.csv", encoding="utf-8")
