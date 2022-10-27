@@ -45,6 +45,8 @@ If you notice a defect, or need support with deployment or demonstrating the kit
 
 ## Architecture
 
+![image](https://user-images.githubusercontent.com/7329459/198363853-8c39253a-4a57-41bf-96f6-68f5e1d44b9d.png)
+
 ![](/assets/Architecture-for-Deploying-Autonomous-Driving-ADAS-workloads-at-scale-3.jpg)
 
 ## Deployment
